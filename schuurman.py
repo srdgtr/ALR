@@ -11,29 +11,36 @@ from sqlalchemy.engine.url import URL
 import configparser
 from pathlib import Path
 import sys
-sys.path.insert(0, str(Path.home()))
-from bol_export_file import get_file
 
-alg_config = configparser.ConfigParser(interpolation=None)
-alg_config.read(Path.home() / "bol_export_files.ini")
-dbx = dropbox.Dropbox(os.environ.get("DROPBOX"))
+sys.path.insert(0, str(Path.cwd().parent))
+from bol_export_file import get_file
+from import_leveranciers.import_data import insert_data, engine
+
+ini_config = configparser.ConfigParser(interpolation=None)
+ini_config.read(Path.home() / "bol_export_files.ini")
 config_db = dict(
     drivername="mariadb",
-    username=alg_config.get("database leveranciers", "user"),
-    password=alg_config.get("database leveranciers", "password"),
-    host=alg_config.get("database leveranciers", "host"),
-    port=alg_config.get("database leveranciers", "port"),
-    database=alg_config.get("database leveranciers", "database"),
+    username=ini_config.get("database odin", "user"),
+    password=ini_config.get("database odin", "password"),
+    host=ini_config.get("database odin", "host"),
+    port=ini_config.get("database odin", "port"),
+    database=ini_config.get("database odin", "database"),
 )
+dropbox_key = os.environ.get("DROPBOX")
+if not dropbox_key:
+    dropbox_key = ini_config.get("dropbox", "api_dropbox")
+
+dbx = dropbox.Dropbox(dropbox_key)
 engine = create_engine(URL.create(**config_db))
-current_folder = Path.cwd().name.upper()
-korting_percent = int(alg_config.get("stap 1 vaste korting", current_folder.lower()).strip("%"))
+scraper_name = Path.cwd().name
+korting_percent = int(ini_config.get("stap 1 vaste korting", scraper_name.lower()).strip("%"))
 
 date_now = datetime.now().strftime("%c").replace(":", "-")
 
+
 def get_latest_file():
-    with FTP(host=alg_config.get("schuurman ftp", "server")) as ftp:
-        ftp.login(user=alg_config.get("schuurman ftp", "user"), passwd=alg_config.get("schuurman ftp", "passwd"))
+    with FTP(host=ini_config.get("schuurman ftp", "server")) as ftp:
+        ftp.login(user=ini_config.get("schuurman ftp", "user"), passwd=ini_config.get("schuurman ftp", "passwd"))
         # ftp.retrlines('LIST')
 
         names = ftp.nlst()
@@ -54,16 +61,15 @@ def get_latest_file():
 
 get_latest_file()
 
-schuurman = pd.read_csv(
-    max(Path.cwd().glob("KSCE_*.csv"), key=os.path.getctime),
-    sep="\t",
-    encoding="cp1250",
-    header=1,
-    dtype={"Artikelnr": object},
-)
-
-schuurman = (
-    schuurman.rename(
+vooraad_info = (
+    pd.read_csv(
+        max(Path.cwd().glob("KSCE_*.csv"), key=os.path.getctime),
+        sep="\t",
+        encoding="cp1250",
+        header=1,
+        dtype={"Artikelnr": object},
+    )
+    .rename(
         columns={
             "Artikelnr": "sku",
             "Ean": "ean",
@@ -77,7 +83,7 @@ schuurman = (
             "Type": "id",
         }
     )
-    .assign(ean = lambda x: pd.to_numeric(x["ean"], errors="coerce"))
+    .assign(ean=lambda x: pd.to_numeric(x["ean"], errors="coerce"))
     .query("stock > 0")
     .query("ean == ean")
     .assign(
@@ -85,20 +91,16 @@ schuurman = (
             x["Netto (excl.BTW)"]
             .add(x["VWB bedrag"], fill_value=0)
             .add(x["BAT bedrag"], fill_value=0)
-            .add(x["ATR bedrag"], fill_value=0)
-            ,2),
+            .add(x["ATR bedrag"], fill_value=0),
+            2,
+        ),
         lk=lambda x: (korting_percent * x["price"] / 100).round(2),
-        eigen_sku = lambda x:"ALR" + x["sku"],
-        advies_prijs = "",
-        gewicht = "",
-        url_plaatje = "",
-        url_artikel = "",
-        lange_omschrijving = "",
-        verpakings_eenheid = "",
-    ).assign(price = lambda x: (x["price"] - x["lk"]).round(2))
+        eigen_sku=lambda x: scraper_name + x["sku"],
+    )
+    .assign(price=lambda x: (x["price"] - x["lk"]).round(2))
 )
 
-schuurman_basic = schuurman[
+vooraad_info = vooraad_info[
     [
         "sku",
         "ean",
@@ -115,63 +117,53 @@ schuurman_basic = schuurman[
     ]
 ]
 
-schuurman_basic.to_csv("ALR_" + date_now + ".csv", index=False, encoding="utf-8-sig")
+vooraad_info.to_csv(f"{scraper_name}_{date_now}.csv", index=False, encoding="utf-8-sig")
 
-latest_file = max(Path.cwd().glob("ALR_*.csv"), key=os.path.getctime)
+latest_file = max(Path.cwd().glob(f"{scraper_name}_*.csv"), key=os.path.getctime)
 with open(latest_file, "rb") as f:
     dbx.files_upload(
         f.read(),
-        "/macro/datafiles/ALR/" + latest_file.name,
+        f"/macro/datafiles/{scraper_name}/" + latest_file.name,
         mode=dropbox.files.WriteMode("overwrite", None),
         mute=True,
     )
 
-extra_columns = {'BTW code': 21,'Leverancier': "alr"}
-vendit_exellent = schuurman.assign(**extra_columns,ean = lambda x:x.ean.astype('string').str.split('.').str[0]).rename(
+extra_columns = {"BTW code": 21, "Leverancier": scraper_name.lower()}
+vendit = vooraad_info.assign(**extra_columns, ean=lambda x: x.ean.astype("string").str.split(".").str[0]).rename(
     columns={
-        "eigen_sku":"Product nummer",
-        "ean" :"EAN nummer",
+        "eigen_sku": "Product nummer",
+        "ean": "EAN nummer",
         "price": "Inkoopprijs exclusief",
         "brand": "Merk",
         "price_advice": "Verkoopprijs inclusief",
-        "group":"Groep Niveau 1",
+        "group": "Groep Niveau 1",
         "info": "Product omschrijving",
     }
 )
-vendit_filename = "ALR_Vendit_import.csv"
-vendit_exellent.to_csv(vendit_filename, index=False, encoding="utf-8-sig")
-with open(vendit_filename, "rb") as f:
+
+vendit.to_csv(f"{scraper_name}_Vendit_import.csv", index=False, encoding="utf-8-sig")
+with open(f"{scraper_name}_Vendit_import.csv", "rb") as f:
     dbx.files_upload(
-        f.read(), f"/VENDIT_IMPORT/{vendit_filename}", mode=dropbox.files.WriteMode("overwrite", None), mute=True
+        f.read(),
+        f"/VENDIT_IMPORT/{scraper_name}_Vendit_import.csv",
+        mode=dropbox.files.WriteMode("overwrite", None),
+        mute=True,
     )
 
+product_info = vooraad_info.rename(
+    columns={
+        # "sku":"onze_sku",
+        # "ean":"ean",
+        "brand": "merk",
+        "stock": "voorraad",
+        "price": "inkoop_prijs",
+        # :"promo_inkoop_prijs",
+        # :"promo_inkoop_actief",
+        "price_advice": "advies_prijs",
+        "info": "omschrijving",
+    }
+).assign(onze_sku=lambda x: scraper_name + x["sku"], import_date=datetime.now())
 
-
-schuurman_info = schuurman.rename(
-    columns={"price": "prijs", "brand": "merk", "group": "category", "info": "product_title","stock":"voorraad"}
-)
-schuurman_info_db = schuurman_info[
-    [
-        "eigen_sku",
-        "sku",
-        "ean",
-        "voorraad",
-        "merk",
-        "prijs",
-        "advies_prijs",
-        "category",
-        "gewicht",
-        "url_plaatje",
-        "url_artikel",
-        "product_title",
-        "lange_omschrijving",
-        "verpakings_eenheid",
-        "lk",
-    ]
-]
-
-current_folder = Path.cwd().name.upper()
-huidige_datum = datetime.now().strftime("%d_%b_%Y")
-schuurman_info_db.to_sql(f"{current_folder}_dag_{huidige_datum}", con=engine, if_exists="replace", index=False, chunksize=1000)
+insert_data(engine, product_info)
 
 engine.dispose()
