@@ -26,7 +26,7 @@ def get_latest_file():
         # ftp.retrlines('LIST')
 
         names = ftp.nlst()
-        final_names = [line for line in names if "KSCE_" in line]
+        final_names = [line for line in names if "SchuurmanCE_" in line]
 
         latest_time = None
         latest_name = None
@@ -45,10 +45,8 @@ get_latest_file()
 
 vooraad_info = (
     pd.read_csv(
-        max(Path.cwd().glob("KSCE_*.csv"), key=os.path.getctime),
-        sep="\t",
-        encoding="cp1250",
-        header=1,
+        max(Path.cwd().glob("SchuurmanCE*.csv"), key=os.path.getctime),
+        sep=",",
         dtype={"Artikelnr": object},
     )
     .rename(
@@ -58,7 +56,6 @@ vooraad_info = (
             "Voorraad": "stock",
             "Merk": "brand",
             "Adv.prijs (incl.BTW)": "price_advice",
-            "Goingprijs (incl.BTW)": "price_going",
             "Omschrijving": "info",
             "Opmerking": "note",
             "Artikelnaam": "group",
@@ -70,11 +67,7 @@ vooraad_info = (
     .query("ean == ean")
     .assign(
         price=lambda x: np.round(
-            x["Netto (excl.BTW)"]
-            .add(x["VWB bedrag"], fill_value=0)
-            .add(x["BAT bedrag"], fill_value=0)
-            .add(x["ATR bedrag"], fill_value=0),
-            2,
+            x["Netto (excl.BTW)"],2
         ),
         lk=lambda x: (korting_percent * x["price"] / 100).round(2),
         eigen_sku=lambda x: scraper_name + x["sku"],
@@ -90,12 +83,12 @@ vooraad_info = vooraad_info[
         "stock",
         "price",
         "price_advice",
-        "price_going",
         "info",
         "note",
         "group",
         "id",
         "lk",
+        "eigen_sku",
     ]
 ]
 
