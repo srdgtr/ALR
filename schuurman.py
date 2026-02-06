@@ -66,13 +66,26 @@ vooraad_info = (
     .query("stock > 0")
     .query("ean == ean")
     .assign(
-        price=lambda x: np.round(
-            x["Netto (excl.BTW)"],2
-        ),
-        lk=lambda x: (korting_percent * x["price"] / 100).round(2),
+        old_price=lambda x: np.round(x["Netto (excl.BTW)"], 2),
+        lk=lambda x: (korting_percent * x["old_price"] / 100).round(2),
         eigen_sku=lambda x: scraper_name + x["sku"],
     )
-    .assign(price=lambda x: (x["price"] - x["lk"]).round(2))
+    .assign(price=lambda x: (x["old_price"] - x["lk"]).round(2))
+    .merge(
+        pd.read_csv(
+            max(Path.cwd().glob("Schuurman_scrape_*.csv"), key=os.path.getctime)
+        )
+        .assign(
+            ean=lambda x: pd.to_numeric(x["ean"], errors="coerce"),
+            scraped_price=lambda x: x["price"]
+            .astype(str)
+        )
+        .drop_duplicates(subset=["ean"])
+        [["ean", "scraped_price"]],
+        on="ean",
+        how="left",
+    )
+    .assign(price=lambda x: x["scraped_price"].fillna(x["old_price"]))
 )
 
 vooraad_info = vooraad_info[
@@ -89,6 +102,7 @@ vooraad_info = vooraad_info[
         "id",
         "lk",
         "eigen_sku",
+        "old_price",
     ]
 ]
 
@@ -112,19 +126,19 @@ vendit = vooraad_info.assign(**extra_columns, ean=lambda x: x.ean.astype("string
 
 save_to_dropbox_vendit(vendit, scraper_name)
 
-product_info = vooraad_info.rename(
-    columns={
-        # "sku":"onze_sku",
-        # "ean":"ean",
-        "brand": "merk",
-        "stock": "voorraad",
-        "price": "inkoop_prijs",
-        # :"promo_inkoop_prijs",
-        # :"promo_inkoop_actief",
-        "group" :"category",
-        "price_advice": "advies_prijs",
-        "info": "omschrijving",
-    }
-).assign(onze_sku=lambda x: scraper_name + x["sku"], import_date=datetime.now())
+# product_info = vooraad_info.rename(
+#     columns={
+#         # "sku":"onze_sku",
+#         # "ean":"ean",
+#         "brand": "merk",
+#         "stock": "voorraad",
+#         "price": "inkoop_prijs",
+#         # :"promo_inkoop_prijs",
+#         # :"promo_inkoop_actief",
+#         "group" :"category",
+#         "price_advice": "advies_prijs",
+#         "info": "omschrijving",
+#     }
+# ).assign(onze_sku=lambda x: scraper_name + x["sku"], import_date=datetime.now())
 
-save_to_db(product_info)
+# save_to_db(product_info)
