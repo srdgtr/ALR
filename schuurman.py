@@ -11,6 +11,9 @@ import sys
 sys.path.insert(0, str(Path.cwd().parent))
 from bol_export_file import get_file
 from process_results.process_data import save_to_db, save_to_dropbox, save_to_dropbox_vendit
+from alle_producten_leveranciers.producten_data_leveranciers import (
+    save_products_to_db_all_table,
+)
 
 ini_config = configparser.ConfigParser(interpolation=None)
 ini_config.read(Path.home() / "bol_export_files.ini")
@@ -43,7 +46,7 @@ def get_latest_file():
 
 get_latest_file()
 
-vooraad_info = (
+vooraad_info_all = (
     pd.read_csv(
         max(Path.cwd().glob("SchuurmanCE*.csv"), key=os.path.getctime),
         sep=",",
@@ -63,8 +66,6 @@ vooraad_info = (
         }
     )
     .assign(ean=lambda x: pd.to_numeric(x["ean"], errors="coerce"))
-    .query("stock > 0")
-    .query("ean == ean")
     .assign(
         old_price=lambda x: np.round(x["Netto (excl.BTW)"], 2),
         lk=lambda x: (korting_percent * x["old_price"] / 100).round(2),
@@ -87,6 +88,11 @@ vooraad_info = (
     )
     .assign(price=lambda x: x["scraped_price"].fillna(x["old_price"]))
 )
+
+save_products_to_db_all_table(
+    vooraad_info_all[["sku", "ean", "price", "stock","info"]], scraper_name
+)
+vooraad_info = vooraad_info_all.query("stock > 0").query("ean == ean")
 
 vooraad_info = vooraad_info[
     [

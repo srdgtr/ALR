@@ -133,7 +133,7 @@ def scrape_page(client, url):
     for product in hoofdindeling_page:
         try:
             product_name = product.xpath('.//div/h6/a/text()')[0].strip()
-            product_price = product.xpath('.//div[contains(@class, "product_price")]//span[@class="oe_currency_value"]/text()')[0].strip()
+            product_price = product.xpath('.//div[contains(@class, "product_price")]//span[@class="oe_currency_value"]/text()')[0].strip().replace(",", "")
             ean = product.xpath('.//div/h6/span[2]/text()')[0].strip()
             products.append({"name": product_name, "price": product_price, "ean": ean})
         except IndexError:
